@@ -28,5 +28,3 @@ class Setting_Pre_Split(setting):
         self.evaluate.data = learned_result
         
         return self.evaluate.evaluate(), None
-
-        
