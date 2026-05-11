@@ -60,7 +60,7 @@ class Method_CNN_MNIST(method, nn.Module):
         # bottleneck 3136 features into 128
         self.fc1 = nn.Linear(64 * 7 * 7, 128)
         # nonlinear activation
-        self.relu3 = nn.ReLU()
+        self.relu_fc = nn.ReLU()
         # drop activation to learn more robust model
         # avoids dependencies on specific neurons
         self.dropout = nn.Dropout(0.5)
@@ -78,7 +78,7 @@ class Method_CNN_MNIST(method, nn.Module):
 
         # classification block - flatten -> fc1 w/ relu3 -> dropout regularization -> fc2
         x = self.flatten(x)
-        x = self.relu3(self.fc1(x))
+        x = self.relu_fc(self.fc1(x))
         # dropout regularization
         x = self.dropout(x)
         x = self.fc2(x)
