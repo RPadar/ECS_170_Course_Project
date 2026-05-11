@@ -36,7 +36,7 @@ class Dataset_Loader_ORL(dataset):
                 image_matrix = np.expand_dims(image_matrix, axis=0)
                 # x is image matrix, y is label
                 X.append(image_matrix)
-                y.append(instance['label'] - 1)
+                y.append(instance['label'])
             # return as numpy array
             return np.array(X), np.array(y)
 
