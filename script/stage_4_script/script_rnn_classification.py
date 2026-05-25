@@ -17,7 +17,8 @@ if 1:
     data_obj = Dataset_Loader_RNN_Classification('IMDB', '')
     data_obj.dataset_source_folder_path = '../../data/stage_4_data/text_classification'
 
-    # load data ahead of time to pass vocabulary_size and pad_index which get initialized
+    # load data ahead of time initialize pass vocabulary_size and pad_index before method
+    # needed to initialize embedding and output layers
     loaded_data = data_obj.load()
 
     # SET CELL TYPE HERE

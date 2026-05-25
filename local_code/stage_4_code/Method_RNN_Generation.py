@@ -1,12 +1,12 @@
 '''
-Concrete MethodModule class for Stage 4 -- RNN Text Classification on IMDB sentiment dataset
+Concrete MethodModule class for Stage 4 -- RNN Text Generation on jokes dataset
 '''
 
 # Copyright (c) 2017-Current Jiawei Zhang <jiawei@ifmlab.org>
 # License: TBD
 
 from local_code.base_class.method import method
-from local_code.stage_4_code.Evaluation_Metrics import Evaluate_Accuracy
+
 import torch
 from torch import nn
 import numpy as np
@@ -14,13 +14,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-class Method_RNN_Classification(method, nn.Module):
+class Method_RNN_Generation(method, nn.Module):
     data = None
 
     # TRAINING SETTINGS
     # defines the max rounds to train the model
-    # baseline - 6
-    max_epoch = 6
+    # baseline - 20
+    max_epoch = 20
     # defines the learning rate for gradient descent based optimizer for model learning
     # baseline - 1e-3
     learning_rate = 1e-3
@@ -35,18 +35,21 @@ class Method_RNN_Classification(method, nn.Module):
     hidden_dim = 128
     # number of stacked recurrent layers
     num_layers = 2
-    # process data forward vs forward and backward
-    bidirectional = True
     # dropout rate for dropout regularization before classification and between recurrent layers
     dropout = 0.5
-    # choose last or mean pooling of hidden states before passing to classification layer
-    pooling = 'last'
+
+    # GENERATION SETTINGS
+    # maximum number of words to generate after seed phrase
+    # generation is also ended by <eos> token
+    generation_length = 25
+    # window_size must match the window_size set in the dataset loader
+    # so it is passed from the data object to the method object by the script
 
     # it defines the RNN model architecture, e.g.,
     # how many layers, size of variables in each layer, activation function, etc.
     # the size of the input/output portal of the model architecture should be consistent with our data input and desired output
     def __init__(self, mName, mDescription, vocabulary_size=None, pad_index=0,
-                 num_classes=2, cell_type='RNN'):
+                 cell_type='RNN'):
 
         method.__init__(self, mName, mDescription)
         nn.Module.__init__(self)
@@ -60,8 +63,8 @@ class Method_RNN_Classification(method, nn.Module):
 
 
         # EMBEDDING LAYER
-        #
-        # turn each word's id into learnable representative vector
+        # turn each word's id into learnable representative vector using PyTorch's Embedding layer
+        # gradient updates will flow to this layer during training
         self.embedding = nn.Embedding(
             # number of embeddings to learn
             num_embeddings=vocabulary_size,
@@ -78,7 +81,6 @@ class Method_RNN_Classification(method, nn.Module):
             hidden_size=self.hidden_dim,
             num_layers=self.num_layers,
             batch_first=True,
-            bidirectional=self.bidirectional,
             # only use dropout between stacked recurrent layers (no dropout with only 1 layer)
             dropout=(self.dropout if self.num_layers > 1 else 0.0)
         )
@@ -92,16 +94,16 @@ class Method_RNN_Classification(method, nn.Module):
         else:
             raise ValueError(f"unknown cell_type: {self.cell_type}")
 
-        # CLASSIFIER LAYER - single fully-connected layer with dropout regularization
-        # size of fc layer doubled if using bidirectional model concatenating forward and backward hidden states
-        head_in = self.hidden_dim * (2 if self.bidirectional else 1)
+        # OUTPUT LAYER
+        # output 1 probability score per vocabulary word
+        head_in = self.hidden_dim
         self.dropout_layer = nn.Dropout(self.dropout)
-        self.fc = nn.Linear(head_in, num_classes)
+        self.fc = nn.Linear(head_in, self.vocabulary_size)
 
     # it defines the forward propagation function for input x
     # this function will calculate the output layer by layer
     def forward(self, x):
-        '''Forward propagation'''
+        '''Forward propagation - window of token ids to prediction score over vocabulary'''
 
         # get embeddings for words
         embedded = self.embedding(x)
@@ -115,20 +117,9 @@ class Method_RNN_Classification(method, nn.Module):
             output, h_n = self.rnn(embedded)
 
         # process hidden states after recurrent layer to determine what to pass to classification layer
-        if self.pooling == 'last':
-            # last pooling
-            if self.bidirectional:
-                # concatenate forward and backward processing RNN final hidden states for bidirectional model
-                # h_n contains final hidden states for both
-                recurrent_out = torch.cat((h_n[-2], h_n[-1]), dim=1)
-            else:
-                # otherwise just pull RNN's last hidden state
-                recurrent_out = h_n[-1]
-        else:
-            # mean pooling - average hidden states across all timesteps
-            recurrent_out = output.mean(dim=1)
-
+        recurrent_out = h_n[-1]
         # classification layer
+        # dropout then fc layer
         recurrent_out = self.dropout_layer(recurrent_out)
         forward_out = self.fc(recurrent_out)
         return forward_out
@@ -142,7 +133,7 @@ class Method_RNN_Classification(method, nn.Module):
     def train(self, X, y):
         # history lists for plots
         self.loss_history = []
-        self.accuracy_history = []
+        # self.accuracy_history = []
 
         # use mps if available
         self.to(self.device)
@@ -151,12 +142,9 @@ class Method_RNN_Classification(method, nn.Module):
         nn.Module.train(self, True)
 
         # check here for the torch.optim doc: https://pytorch.org/docs/stable/optim.html
-        # Add L2 regularization to prevent overfitting
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=1e-4)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         # check here for the nn.CrossEntropyLoss doc: https://pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html
         loss_function = nn.CrossEntropyLoss()
-        # for training accuracy investigation purpose
-        accuracy_evaluator = Evaluate_Accuracy('training evaluator', '')
 
         # convert x and y data to tensors and send to device
         # LongTensor over FloatTensor because values are word ids not normalized pixel values
@@ -172,7 +160,7 @@ class Method_RNN_Classification(method, nn.Module):
 
             # metrics
             epoch_loss = 0
-            epoch_correct = 0
+            #epoch_correct = 0
 
             # iterate through mini-batches
             for i in range(0, n_samples, self.batch_size):
@@ -194,44 +182,65 @@ class Method_RNN_Classification(method, nn.Module):
 
                 # track loss across the whole epoch
                 epoch_loss += loss.item() * len(batch_indices)
-                epoch_correct += (y_pred.max(1)[1] == y_batch).sum().item()
+                #epoch_correct += (y_pred.max(1)[1] == y_batch).sum().item()
 
                 # report some batch statistics for each epoch
                 if i % (self.batch_size * 100) == 0:
-                    batch_accuracy = (y_pred.max(1)[1] == y_batch).float().mean().item()
+
                     print(f"  epoch {epoch} | sample {i}/{n_samples} |"
-                          f" batch_loss {loss.item():.4f} | batch_accuracy {batch_accuracy:.4f}")
+                          f" batch_loss {loss.item():.4f}")
 
             # get metrics averaged per sample
             avg_loss = epoch_loss / n_samples
-            avg_accuracy = epoch_correct / n_samples
             self.loss_history.append(avg_loss)
-            self.accuracy_history.append(avg_accuracy)
 
             # report epoch metrics
             if 1:
-                print("Epoch:", epoch, "Accuracy:", avg_accuracy, "Loss", avg_loss)
+                print("Epoch:", epoch, "Loss", avg_loss)
 
+    # generates text from seed phrase
+    # converts seed words to ids then predicts next word
+    # adds next word to context window to predict next next word and so on
+    # model chooses when to stop generation with <eos> token (or when reaching maximum generation length)
+    def generate(self, seed, length=None):
+        if length is None:
+            length = self.generation_length
 
-    # model evaluation on test data with batched testing
-    def test(self, X):
-        # evaluation mode - no dropout
+        # evaluation mode - disable dropout
         nn.Module.train(self, False)
-        X_tensor = torch.LongTensor(np.array(X)).to(self.device)
+        # send to device
+        self.to(self.device)
 
-        predictions = []
-        # disable gradient calculation during testing to preserve memory
+        # get indices for unknown and eos tokens
+        unknown_index = self.word_to_index['<unk>']
+        eos_index = self.word_to_index['<eos>']
+
+        # convert words of seed phrase to tokens/ids
+        current_ids = []
+        for word in seed:
+            word = word.lower()
+            current_ids.append(self.word_to_index.get(word, unknown_index))
+
+        # disable gradient calculations during generation
         with torch.no_grad():
-            # batch test set instead of making one forward pass over all testing data
-            # avoid RunTimeError: Invalid buffer size
-            for i in range(0, len(X_tensor), self.batch_size):
-                X_batch = X_tensor[i:i+self.batch_size]
-                y_pred = self.forward(X_batch)
-                # argmax over logits gives predicted class
-                predictions.append(y_pred.max(1)[1].cpu())
+            for i in range(length):
+                # context to generate is current window
+                window = current_ids[-self.window_size:]
+                x = torch.LongTensor([window]).to(self.device)
 
-        # concat each batch's predictions together
-        return torch.cat(predictions)
+                logits = self.forward(x).squeeze(0)
+                # predicted word is word with highest computed probability score / logit
+                next_id = logits.argmax().item()
+                # predicted word gets used for next context window
+                current_ids.append(next_id)
+
+                # end generation at end of stream token
+                if next_id == eos_index:
+                    break
+
+        # convert tokens back to words and join into string
+        words = [self.index_to_word[i] for i in current_ids]
+        return ' '.join(words)
 
 
     # creates convergence plot for Section 3.5
@@ -239,33 +248,34 @@ class Method_RNN_Classification(method, nn.Module):
         # for x-axis, number epochs starting from 1
         epochs = range(1, len(self.loss_history) + 1)
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-
-        ax1.plot(epochs, self.loss_history, 'b-')
-        ax1.set_title(f'{self.cell_type} Classification Training Loss Convergence')
-        ax1.set_xlabel('Epoch')
-        ax1.set_ylabel('Loss')
-        ax1.grid(True)
-
-        ax2.plot(epochs, self.accuracy_history, 'g-')
-        ax2.set_title(f'{self.cell_type} Classification Training Accuracy Convergence')
-        ax2.set_xlabel('Epoch')
-        ax2.set_ylabel('Accuracy')
-        ax2.grid(True)
-
+        plt.figure(figsize=(8,5))
+        plt.plot(epochs, self.loss_history, 'b-')
+        plt.title(f'{self.cell_type} Generation Training Loss Convergence')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.grid(True)
         plt.tight_layout()
-        plt.savefig(f'../../result/stage_4_result/convergence_{self.cell_type}_Classification.png')
+        plt.savefig(f'../../result/stage_4_result/convergence_{self.cell_type}_Generation.png')
         plt.show()
 
 
     def run(self):
         print('method running...')
-        print(f'    device: {self.device}, cell: {self.cell_type}, pooling: {self.pooling}')
+        print(f'    device: {self.device}, cell: {self.cell_type}')
         print('--start training...')
         self.train(self.data['train']['X'], self.data['train']['y'])
-        print('--start testing...')
-        pred_y = self.test(self.data['test']['X'])
 
         self.plot_convergence()
 
-        return {'pred_y': pred_y, 'true_y': self.data['test']['y']}
+        print('--generating samples')
+        seeds = [['what', 'did', 'the'],
+                 ['what', 'do', 'you'],
+                 ['why', 'did', 'the'],
+                 ['how', 'many', 'of']
+                ]
+
+        for seed in seeds:
+            text = self.generate(seed)
+            print(f"    seed {seed} ->\n    {text}\n")
+
+        return {'loss_history': self.loss_history}
