@@ -8,6 +8,7 @@ Course project for ECS 170 - Introduction to Artificial Intelligence at UC Davis
 - scikit-learn
 - NumPy
 - Matplotlib
+- NLTK
 
 ### Note
 This project is built off of a code template provided by the ECS 170 instructor.
